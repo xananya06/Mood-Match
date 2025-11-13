@@ -1,5 +1,4 @@
-# 🌟 Mood Match
-
+# Mood Match🧘‍♀️🍵
 > *Finding you a BU peer when you need one most* 🐾
 
 A multi-agent AI system that matches BU students for peer support conversations. 
