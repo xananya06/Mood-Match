@@ -5,6 +5,18 @@ function MatchResult() {
   const navigate = useNavigate();
   const result = location.state?.result;
 
+  // Map emotions to avatars and descriptions
+  const emotionMap = {
+    "stressed": { avatar: "😰", color: "yellow" },
+    "lonely": { avatar: "🏠", color: "blue" },
+    "anxious": { avatar: "😟", color: "purple" },
+    "overwhelmed": { avatar: "😫", color: "red" },
+    "sad": { avatar: "😢", color: "blue" },
+    "homesick": { avatar: "🏠", color: "blue" },
+    "worried": { avatar: "😟", color: "purple" },
+    "uncertain": { avatar: "🤔", color: "gray" }
+  };
+
   const conversationStarters = result?.conversation_strategy?.conversation_starters || [
     "Hey! How's your day going?",
     "I'm also dealing with stress lately. How are you managing?",
@@ -12,6 +24,10 @@ function MatchResult() {
   ];
 
   const matchScore = Math.floor(Math.random() * 20) + 80; // 80-100 for demo
+
+  // Get matched peer info from mood analysis
+  const primaryEmotion = result?.mood_analysis?.primary_emotion || "stressed";
+  const emotionInfo = emotionMap[primaryEmotion.toLowerCase()] || emotionMap["stressed"];
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-50 flex items-center justify-center p-4">
@@ -30,19 +46,25 @@ function MatchResult() {
             </p>
           </div>
 
-          {/* Match Score */}
-          <div className="bg-gradient-to-r from-purple-100 to-blue-100 rounded-xl p-6 mb-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-lg font-semibold text-gray-700 mb-1">
-                  Compatibility Score
-                </h3>
-                <p className="text-sm text-gray-600">
-                  Based on multi-agent analysis
-                </p>
+          {/* Matched Peer Card */}
+          <div className="bg-gradient-to-r from-purple-100 to-blue-100 rounded-xl p-6 mb-6 border-2 border-purple-200">
+            <h3 className="text-lg font-semibold text-gray-700 mb-4">
+              You matched with:
+            </h3>
+            <div className="flex items-center gap-4 bg-white rounded-lg p-4 shadow-md">
+              <div className="text-5xl">{emotionInfo.avatar}</div>
+              <div className="flex-1">
+                <h4 className="font-bold text-gray-900 text-lg">BU Student</h4>
+                <p className="text-gray-600 capitalize">Feeling {primaryEmotion}</p>
+                {result?.mood_analysis?.matching_criteria?.similar_experience && (
+                  <p className="text-sm text-gray-500 mt-1">
+                    Also experiencing: {result.mood_analysis.matching_criteria.similar_experience.replace(/_/g, ' ')}
+                  </p>
+                )}
               </div>
-              <div className="text-5xl font-bold text-purple-600">
-                {matchScore}%
+              <div className="text-right">
+                <div className="text-3xl font-bold text-purple-600">{matchScore}%</div>
+                <div className="text-xs text-gray-500">Compatible</div>
               </div>
             </div>
           </div>
@@ -88,7 +110,10 @@ function MatchResult() {
                 <div 
                   key={index}
                   className="bg-purple-50 border-2 border-purple-200 rounded-lg p-4 hover:bg-purple-100 transition-colors cursor-pointer"
-                  onClick={() => navigator.clipboard.writeText(starter)}
+                  onClick={() => {
+                    navigator.clipboard.writeText(starter);
+                    alert('Copied to clipboard!');
+                  }}
                 >
                   <p className="text-gray-800">{starter}</p>
                   <p className="text-xs text-gray-500 mt-1">Click to copy</p>

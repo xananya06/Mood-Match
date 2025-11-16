@@ -1,11 +1,12 @@
 """
-API routes for peer matching - integrated with Multi-Agent Coordinator
+IMPROVED API routes for peer matching - NOW WITH MATCH HISTORY!
+Prevents re-matching and tracks who has been matched before
 """
 
 from fastapi import APIRouter, HTTPException
 from app.models.schemas import PeerProfile, MatchResult, MoodMatchSession
 from app.agents.multi_agent_coordinator import MultiAgentCoordinator
-from app.agents.peer_matcher import PeerMatcher
+from app.agents.peer_matcher import PeerMatcher  # Using improved version!
 from app.agents.conversation_facilitator import ConversationFacilitator
 from typing import List, Dict
 import uuid
@@ -15,23 +16,86 @@ router = APIRouter(prefix="/api/match", tags=["matching"])
 
 # Initialize coordinator and agents
 coordinator = MultiAgentCoordinator()
-peer_matcher = PeerMatcher()
+peer_matcher = PeerMatcher()  # Now with match history!
 conversation_facilitator = ConversationFacilitator()
 
 # In-memory storage for demo (replace with database in production)
 waiting_peers = {}
 active_matches = {}
 
+# DEMO: Pre-populate with some sample peers
+DEMO_PEERS = [
+    {
+        "user_id": "demo_peer_1",
+        "profile": {
+            "user_id": "demo_peer_1",
+            "mood_analysis": {
+                "primary_emotion": "stressed",
+                "urgency_level": "MODERATE",
+                "needs": ["listener", "emotional support"],
+                "matching_criteria": {
+                    "similar_experience": "academic stress",
+                    "support_type": "listener",
+                    "context": "finals week"
+                }
+            },
+            "seeking_support": True,
+            "available_to_support": True,
+            "timestamp": datetime.now().isoformat()
+        },
+        "added_at": datetime.now().isoformat()
+    },
+    {
+        "user_id": "demo_peer_2",
+        "profile": {
+            "user_id": "demo_peer_2",
+            "mood_analysis": {
+                "primary_emotion": "lonely",
+                "urgency_level": "MODERATE",
+                "needs": ["companion", "social connection"],
+                "matching_criteria": {
+                    "similar_experience": "homesickness",
+                    "support_type": "companion",
+                    "context": "adjusting to BU"
+                }
+            },
+            "seeking_support": True,
+            "available_to_support": True,
+            "timestamp": datetime.now().isoformat()
+        },
+        "added_at": datetime.now().isoformat()
+    },
+    {
+        "user_id": "demo_peer_3",
+        "profile": {
+            "user_id": "demo_peer_3",
+            "mood_analysis": {
+                "primary_emotion": "anxious",
+                "urgency_level": "MODERATE",
+                "needs": ["advisor", "practical guidance"],
+                "matching_criteria": {
+                    "similar_experience": "career anxiety",
+                    "support_type": "advisor",
+                    "context": "job hunting"
+                }
+            },
+            "seeking_support": True,
+            "available_to_support": True,
+            "timestamp": datetime.now().isoformat()
+        },
+        "added_at": datetime.now().isoformat()
+    }
+]
+
+# Add demo peers to waiting queue
+for peer in DEMO_PEERS:
+    waiting_peers[peer["user_id"]] = peer
+
 @router.post("/join-queue", response_model=dict)
 async def join_matching_queue(mood_entry: dict):
     """
     Add a student to the matching queue using multi-agent analysis
-    
-    This endpoint:
-    1. Processes mood through the coordinator
-    2. Checks for crisis (automatic multi-agent validation)
-    3. If safe, adds to matching queue
-    4. Returns queue status
+    NOW WITH MATCH HISTORY TRACKING!
     """
     try:
         user_id = mood_entry.get("user_id")
@@ -71,6 +135,9 @@ async def join_matching_queue(mood_entry: dict):
             "added_at": datetime.now().isoformat()
         }
         
+        # Get match statistics
+        match_stats = peer_matcher.get_match_statistics(user_id)
+        
         return {
             "status": "in_queue",
             "message": "Looking for a peer match for you...",
@@ -78,7 +145,8 @@ async def join_matching_queue(mood_entry: dict):
             "queue_position": len(waiting_peers),
             "estimated_wait": "1-5 minutes",
             "agents_activated": coordination_result.get("agents_activated", []),
-            "matching_initiated": coordination_result.get("matching_initiated", False)
+            "matching_initiated": coordination_result.get("matching_initiated", False),
+            "your_previous_matches": match_stats["total_matches"]
         }
         
     except Exception as e:
@@ -88,11 +156,7 @@ async def join_matching_queue(mood_entry: dict):
 async def find_peer_match(user_id: str):
     """
     Attempt to find a match using multi-agent coordination
-    
-    The coordinator ensures:
-    - Safe matches (no crisis situations)
-    - Compatible emotional states
-    - Appropriate conversation strategies
+    NOW PREVENTS RE-MATCHING WITH PREVIOUS PEERS!
     """
     try:
         if user_id not in waiting_peers:
@@ -118,7 +182,7 @@ async def find_peer_match(user_id: str):
                 "safety_flag": False
             }
         
-        # Use peer matcher to find best match
+        # Use peer matcher to find best match (now with history filtering!)
         match_result = peer_matcher.find_match(user_profile, available_peers)
         
         # If match found, get conversation strategy from coordinator
@@ -147,7 +211,12 @@ async def find_peer_match(user_id: str):
                     "peer1": user_data.get("coordination_result", {}).get("agent_communications", []),
                     "peer2": matched_peer_data.get("coordination_result", {}).get("agent_communications", [])
                 },
-                "conversation_strategy": user_data.get("coordination_result", {}).get("conversation_strategy", {})
+                "conversation_strategy": user_data.get("coordination_result", {}).get("conversation_strategy", {}),
+                "match_metadata": {
+                    "is_new_match": match_result.get("is_new_match", True),
+                    "match_number": match_result.get("previous_matches_count", 0) + 1,
+                    "match_quality": match_result.get("match_score", 0)
+                }
             }
             
             # Remove both from waiting queue
@@ -158,6 +227,7 @@ async def find_peer_match(user_id: str):
             match_result["conversation_id"] = conversation_id
             match_result["multi_agent_support"] = True
             match_result["conversation_strategy"] = active_matches[conversation_id]["conversation_strategy"]
+            match_result["match_metadata"] = active_matches[conversation_id]["match_metadata"]
         
         return match_result
         
@@ -168,16 +238,20 @@ async def find_peer_match(user_id: str):
 async def get_queue_status(user_id: str):
     """
     Check the status of a user in the matching queue
+    NOW WITH MATCH HISTORY INFO!
     """
     try:
         if user_id in waiting_peers:
             user_data = waiting_peers[user_id]
+            match_stats = peer_matcher.get_match_statistics(user_id)
+            
             return {
                 "in_queue": True,
                 "position": list(waiting_peers.keys()).index(user_id) + 1,
                 "total_waiting": len(waiting_peers),
                 "coordination_complete": True,
-                "agents_used": user_data.get("coordination_result", {}).get("agents_activated", [])
+                "agents_used": user_data.get("coordination_result", {}).get("agents_activated", []),
+                "your_match_history": match_stats
             }
         
         # Check if in active match
@@ -187,7 +261,8 @@ async def get_queue_status(user_id: str):
                     "in_queue": False,
                     "matched": True,
                     "conversation_id": conv_id,
-                    "multi_agent_monitoring": True
+                    "multi_agent_monitoring": True,
+                    "match_metadata": match_data.get("match_metadata", {})
                 }
         
         return {
@@ -199,11 +274,26 @@ async def get_queue_status(user_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error checking status: {str(e)}")
 
+@router.get("/match-history/{user_id}")
+async def get_match_history(user_id: str):
+    """
+    Get a user's match history
+    NEW ENDPOINT!
+    """
+    try:
+        stats = peer_matcher.get_match_statistics(user_id)
+        return {
+            "user_id": user_id,
+            "total_lifetime_matches": stats["total_matches"],
+            "matched_peer_ids": stats["matched_with"],
+            "message": f"You've been matched with {stats['total_matches']} different peers"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching history: {str(e)}")
+
 @router.delete("/leave-queue")
 async def leave_matching_queue(user_id: str):
-    """
-    Remove a user from the matching queue.
-    """
+    """Remove a user from the matching queue."""
     try:
         if user_id in waiting_peers:
             waiting_peers.pop(user_id)
@@ -214,58 +304,27 @@ async def leave_matching_queue(user_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error leaving queue: {str(e)}")
 
-@router.get("/conversation/{conversation_id}/facilitate")
-async def get_conversation_facilitation(conversation_id: str, latest_message: str):
-    """
-    Get real-time conversation facilitation from the multi-agent system
-    
-    The ConversationFacilitator monitors the conversation and provides:
-    - Safety checks
-    - Conversation prompts if needed
-    - Resource suggestions
-    - Crisis detection
-    """
-    try:
-        if conversation_id not in active_matches:
-            raise HTTPException(status_code=404, detail="Conversation not found")
-        
-        match_data = active_matches[conversation_id]
-        
-        # Use conversation facilitator
-        facilitation = conversation_facilitator.facilitate_conversation(
-            message=latest_message,
-            conversation_context=match_data
-        )
-        
-        # Add to conversation history
-        match_data["conversation_history"].append({
-            "message": latest_message,
-            "facilitation": facilitation,
-            "timestamp": datetime.now().isoformat()
-        })
-        
-        return {
-            "conversation_id": conversation_id,
-            "facilitation": facilitation,
-            "multi_agent_monitoring": True
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error facilitating conversation: {str(e)}")
-
 @router.get("/system-stats")
 async def get_system_statistics():
     """
     Get comprehensive multi-agent system statistics
-    
-    Perfect for demos and monitoring!
+    ENHANCED with match history stats!
     """
     try:
+        # Calculate match history statistics
+        total_unique_users = len(peer_matcher.match_history)
+        total_matches_made = sum(len(matches) for matches in peer_matcher.match_history.values()) // 2
+        
         return {
             "coordinator_stats": coordinator.get_agent_statistics(),
             "queue_stats": {
                 "waiting_peers": len(waiting_peers),
                 "active_matches": len(active_matches)
+            },
+            "match_history_stats": {
+                "total_users_matched": total_unique_users,
+                "total_matches_created": total_matches_made,
+                "avg_matches_per_user": total_matches_made / total_unique_users if total_unique_users > 0 else 0
             },
             "system_health": "operational"
         }
