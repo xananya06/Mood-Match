@@ -17,8 +17,8 @@ app.add_middleware(
 # Import routes
 try:
     from app.api.routes import mood, matching
-    app.include_router(mood.router)
-    app.include_router(matching.router)
+    app.include_router(mood.router, prefix="/api")  # ADD PREFIX HERE
+    app.include_router(matching.router, prefix="/api")  # ADD PREFIX HERE
     print("✅ All routes loaded successfully!")
 except Exception as e:
     print(f"❌ Error loading routes: {e}")
@@ -32,6 +32,3 @@ def read_root():
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
-
-
-
