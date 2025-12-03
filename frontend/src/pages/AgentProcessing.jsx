@@ -99,10 +99,10 @@ export default function AgentProcessing() {
       const matchResult = await matchResponse.json();
       console.log('✅ Match result:', matchResult);
       
-      // Force navigation after 500ms
+      // FIXED: Navigate to /match (not /result) to match App.jsx route definition
       setTimeout(() => {
-        console.log('🎉 Navigating to result...');
-        navigate('/result', { 
+        console.log('🎉 Navigating to match page...');
+        navigate('/match', { 
           state: { 
             result: matchResult,
             moodText,
