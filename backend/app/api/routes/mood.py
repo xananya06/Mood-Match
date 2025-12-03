@@ -8,11 +8,17 @@ from app.models.schemas import MoodEntry, MoodAnalysis, ResourceRecommendation
 from app.agents.multi_agent_coordinator import MultiAgentCoordinator
 from app.agents.bu_resources import get_crisis_resources, get_mental_health_resources
 from typing import List, Dict
+import anthropic
+import os
 
 router = APIRouter(prefix="/api/mood", tags=["mood"])
 
-# Initialize the multi-agent coordinator (replaces standalone mood_analyzer)
-coordinator = MultiAgentCoordinator()
+# Initialize clients ONCE at module level
+anthropic_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+# Initialize the multi-agent coordinator with clients
+# Pass None for supabase since we're using demo data
+coordinator = MultiAgentCoordinator(anthropic_client, None)
 
 @router.post("/analyze", response_model=Dict)
 async def analyze_mood(mood_entry: MoodEntry):
@@ -31,7 +37,7 @@ async def analyze_mood(mood_entry: MoodEntry):
     try:
         # Use the multi-agent coordinator!
         # This orchestrates all agents working together
-        result = coordinator.process_mood_entry(
+        result = await coordinator.process_mood_entry(
             user_input=mood_entry.mood_description,
             user_context={
                 "user_id": mood_entry.user_id,
@@ -65,7 +71,7 @@ async def check_for_crisis(mood_entry: MoodEntry):
     """
     try:
         # Process through coordinator
-        result = coordinator.process_mood_entry(
+        result = await coordinator.process_mood_entry(
             user_input=mood_entry.mood_description,
             user_context={"user_id": mood_entry.user_id}
         )
@@ -155,7 +161,7 @@ async def get_agent_statistics():
     - Crisis consultations
     """
     try:
-        stats = coordinator.get_agent_statistics()
+        stats = coordinator.get_statistics()
         return stats
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching agent stats: {str(e)}")

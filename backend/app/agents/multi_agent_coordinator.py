@@ -1,268 +1,217 @@
 """
-Multi-Agent Coordinator - UPDATED WITH LOCATIONAGENT
-Orchestrates the collaboration between all agents in the Mood Match system.
+Updated Coordinator with Voting
+Replace your existing coordinator.py with this
 """
 
-from typing import Dict, List
-from dataclasses import dataclass
-from datetime import datetime
-from anthropic import Anthropic
-import os
+from .base_agent import BaseAgent
+from .message_bus import MessageBus, MessageType
+from .mood_analyzer import MoodAnalyzer
+from .peer_matcher import PeerMatcher
+from .location_agent import LocationAgent
+from .safety_agent import SafetyAgent
+from .email_generator import EmailGenerator  # Keep your existing one
+import anthropic
+import asyncio
 
-from app.agents.mood_analyzer import MoodAnalyzer
-from app.agents.peer_matcher import PeerMatcher
-from app.agents.conversation_facilitator import ConversationFacilitator
-from app.agents.location_agent import LocationAgent  # NEW!
-
-
-@dataclass
-class AgentMessage:
-    sender: str
-    recipient: str
-    message_type: str  # request, response, query, alert
-    content: Dict
-    timestamp: str = None
+class MultiAgentCoordinator(BaseAgent):
+    def __init__(self, anthropic_client, supabase_client):
+        # Create message bus FIRST
+        self.message_bus = MessageBus()
+        super().__init__("Coordinator", self.message_bus)
+        
+        # Create all agents with the message bus
+        self.mood_analyzer = MoodAnalyzer(self.message_bus, anthropic_client)
+        self.peer_matcher = PeerMatcher(self.message_bus, anthropic_client, supabase_client)
+        self.location_agent = LocationAgent(self.message_bus, anthropic_client)
+        self.safety_agent = SafetyAgent(self.message_bus)
+        self.email_generator = EmailGenerator(self.message_bus, anthropic_client)  # Update this too
+        
+        self.client = anthropic_client
+        self.supabase = supabase_client
     
-    def __post_init__(self):
-        if self.timestamp is None:
-            self.timestamp = datetime.now().isoformat()
-
-
-class MultiAgentCoordinator:
-    """
-    Meta-agent that orchestrates other agents using:
-    - Hierarchical coordination
-    - Dynamic strategy selection
-    - Communication logging
-    """
-    
-    def __init__(self):
-        self.client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-        
-        # Initialize all agents
-        self.mood_analyzer = MoodAnalyzer()
-        self.peer_matcher = PeerMatcher()
-        self.conversation_facilitator = ConversationFacilitator()
-        self.location_agent = LocationAgent()  # NEW!
-        
-        # Communication log
-        self.communication_log: List[AgentMessage] = []
-        
-    def log_communication(self, message: AgentMessage):
-        """Log inter-agent communication"""
-        self.communication_log.append(message)
-        
-    def get_communication_log(self) -> List[Dict]:
-        """Get formatted communication log"""
-        return [
-            {
-                "sender": msg.sender,
-                "recipient": msg.recipient,
-                "type": msg.message_type,
-                "content": msg.content,
-                "timestamp": msg.timestamp
-            }
-            for msg in self.communication_log
-        ]
-    
-    def decide_activation_strategy(self, mood_analysis: Dict) -> Dict:
+    async def process_mood_entry(self, user_input: str = None, mood_text: str = None, 
+                           user_context: dict = None, user_profile: dict = None):
         """
-        Coordinator decides which agents to activate and in what order.
-        
-        Returns:
-            {
-                "strategy": "sequential" | "parallel" | "crisis",
-                "agents": ["agent1", "agent2"],
-                "reasoning": "why this strategy"
-            }
+        Process mood entry (async version for FastAPI)
+        Accepts either user_input or mood_text
         """
-        urgency = mood_analysis.get("urgency_level", "MODERATE")
+        text = user_input or mood_text
+        profile = user_profile or user_context or {}
         
-        system_prompt = """You are the Coordinator agent deciding activation strategy.
-
-Based on mood analysis, decide:
-1. Which agents to activate
-2. In what order (sequential, parallel, or crisis mode)
-3. Reasoning for this decision
-
-AVAILABLE AGENTS:
-- MoodAnalyzer: Already ran
-- PeerMatcher: Find compatible peers
-- ConversationFacilitator: Provide conversation support
-- LocationAgent: Recommend meetup locations
-
-STRATEGIES:
-- sequential: Activate agents one by one (clear causality)
-- parallel: Activate multiple simultaneously (lower latency)
-- crisis: Emergency mode with validation
-
-RULES:
-- If CRISIS urgency: Use crisis strategy
-- If HIGH urgency: Use sequential for safety
-- If MODERATE/LOW: Can use parallel
-
-Return JSON:
-{
-    "strategy": "...",
-    "agents": ["agent1", "agent2"],
-    "reasoning": "..."
-}"""
-
+        # Just call the async method directly
+        return await self.process_match_request(text, profile)
+    
+    async def process_match_request(self, user_input: str, user_profile: dict):
+        """Main workflow - simplified without voting"""
+        
+        print("\n" + "="*80)
+        print("🎯 COORDINATOR: Starting multi-agent matching")
+        print("="*80)
+        
+        # Phase 1: Mood Analysis (broadcasts to all)
+        print("\n📊 PHASE 1: Mood Analysis")
+        mood_analysis = await self.mood_analyzer.analyze_mood(user_input)
+        
+        # Phase 2: Find available peers
+        print("\n🔍 PHASE 2: Finding available peers")
+        available_peers = await self._get_available_peers(user_profile)
+        
+        # Phase 3: Peer Matching (queries other agents, then proposes)
+        print("\n🤝 PHASE 3: Peer Matching")
+        match_result = await self.peer_matcher.find_match(user_profile, available_peers)
+        
+        if not match_result.get("match_found"):
+            return {"match_found": False, "reason": "No suitable matches"}
+        
+        print("  ✅ Match found!")
+        
+        # Phase 4: Finalization
+        print("\n📍 PHASE 4: Generating recommendations")
+        
+        # Get location recommendations (with error handling)
+        location = None
         try:
-            response = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=500,
-                system=system_prompt,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": f"Mood Analysis:\n{mood_analysis}\n\nDecide activation strategy."
-                    }
-                ]
+            location = await self.location_agent.recommend_location(
+                mood_analysis.get("emotional_themes", []),
+                user_profile,
+                match_result
             )
-            
-            import json
-            response_text = response.content[0].text.strip()
-            if response_text.startswith("```json"):
-                response_text = response_text.replace("```json", "").replace("```", "").strip()
-            
-            decision = json.loads(response_text)
-            
-            # Log decision
-            decision_msg = AgentMessage(
-                sender="Coordinator",
-                recipient="System",
-                message_type="decision",
-                content=decision
-            )
-            self.log_communication(decision_msg)
-            
-            return decision
-            
         except Exception as e:
-            print(f"Error in activation decision: {e}")
-            # Fallback
-            return {
-                "strategy": "sequential",
-                "agents": ["peer_matcher", "conversation_facilitator", "location_agent"],
-                "reasoning": "Default sequential strategy"
-            }
-    
-    def process_mood_entry(self, mood_text: str, user_profile: Dict = None) -> Dict:
-        """
-        Main coordination method - orchestrates all agents.
+            print(f"  ⚠️  Location agent error (continuing anyway): {e}")
         
-        Args:
-            mood_text: User's mood description
-            user_profile: Optional user profile data
-            
-        Returns:
-            Complete result with all agent outputs
-        """
-        # Clear previous log
-        self.communication_log = []
-        
-        result = {
-            "success": False,
-            "mood_analysis": None,
-            "coordination_strategy": None,
-            "match_result": None,
-            "conversation_support": None,
-            "location_recommendations": None,  # NEW!
-            "communication_log": []
-        }
-        
+        # Generate email (with error handling)
+        email = None
         try:
-            # STEP 1: MOOD ANALYSIS (Reactive Agent)
-            mood_analysis = self.mood_analyzer.analyze_mood(mood_text)
-            result["mood_analysis"] = mood_analysis
-            
-            mood_msg = AgentMessage(
-                sender="MoodAnalyzer",
-                recipient="Coordinator",
-                message_type="response",
-                content=mood_analysis
+            email = await self.email_generator.generate_email(
+                user_profile,
+                match_result,
+                location
             )
-            self.log_communication(mood_msg)
-            
-            # STEP 2: DECIDE COORDINATION STRATEGY (Deliberative Agent)
-            activation_decision = self.decide_activation_strategy(mood_analysis)
-            result["coordination_strategy"] = activation_decision
-            
-            # STEP 3: CHECK FOR CRISIS
-            if mood_analysis.get("urgency_level") == "CRISIS":
-                # Crisis mode: Multi-agent validation required
-                validation = self.conversation_facilitator.validate_crisis(mood_text)
-                
-                validation_msg = AgentMessage(
-                    sender="ConversationFacilitator",
-                    recipient="Coordinator",
-                    message_type="alert",
-                    content={"crisis_validated": validation}
-                )
-                self.log_communication(validation_msg)
-                
-                result["crisis_detected"] = True
-                result["crisis_validated"] = validation
-                result["success"] = True
-                result["communication_log"] = self.get_communication_log()
-                return result
-            
-            # STEP 4: EXECUTE ACTIVATION STRATEGY
-            # For now, we'll do sequential activation
-            
-            result["success"] = True
-            result["communication_log"] = self.get_communication_log()
-            return result
-            
         except Exception as e:
-            print(f"Error in coordination: {e}")
-            import traceback
-            traceback.print_exc()
-            result["error"] = str(e)
-            result["communication_log"] = self.get_communication_log()
-            return result
-    
-    def get_location_recommendations(
-        self, 
-        student1_profile: Dict, 
-        student2_profile: Dict, 
-        match_context: Dict
-    ) -> Dict:
-        """
-        Get location recommendations using LocationAgent
-        NEW METHOD FOR INTEGRATION
-        """
+            print(f"  ⚠️  Location agent error (continuing anyway): {e}")
+        
+        # Generate email (with error handling)
+        email = None
         try:
-            location_recs = self.location_agent.recommend_locations(
-                student1_profile,
-                student2_profile,
-                match_context
+            email = await self.email_generator.generate_email(
+                user_profile,
+                match_result,
+                location
             )
-            
-            # Log communication
-            location_message = AgentMessage(
-                sender="LocationAgent",
-                recipient="Coordinator",
-                message_type="response",
-                content=location_recs
-            )
-            self.log_communication(location_message)
-            
-            return location_recs
         except Exception as e:
-            print(f"Error getting location recommendations: {e}")
-            return {
-                "locations": [],
-                "overall_strategy": "Meet somewhere comfortable",
-                "timing_suggestion": "Afternoon",
-                "conversation_tips": []
-            }
-    
-    def get_statistics(self) -> Dict:
-        """Get system statistics"""
+            print(f"  ⚠️  Email generator error (continuing anyway): {e}")
+        
+        print("\n✅ Match complete!")
+        print("="*80)
+        
         return {
-            "total_communications": len(self.communication_log),
-            "agents_active": ["MoodAnalyzer", "Coordinator", "PeerMatcher", "ConversationFacilitator", "LocationAgent"],
-            "average_messages_per_session": len(self.communication_log)
+            "match_found": True,
+            "mood_analysis": mood_analysis,
+            "match": match_result,
+            "location": location,
+            "email": email,
+            "agent_communication_log": self.message_bus.get_all_messages()  # Already returns dicts!
         }
+    
+    async def _get_available_peers(self, user_profile: dict):
+        """Get available peers - using demo data for now"""
+        try:
+            # Import demo data
+            from app.demo_data import DEMO_STUDENT_PROFILES
+            
+            # Convert demo profiles to waiting peers format
+            peers = []
+            for profile in DEMO_STUDENT_PROFILES:
+                if profile.get("user_id") != user_profile.get("user_id"):
+                    peers.append({
+                        "user_id": profile["user_id"],
+                        "profile": profile,
+                        "mood_analysis": {
+                            "primary_emotion": "seeking support",
+                            "urgency_level": "MODERATE"
+                        }
+                    })
+            
+            print(f"  Found {len(peers)} available peers")
+            return peers
+            
+        except Exception as e:
+            print(f"Error getting peers: {e}")
+            return []
+    
+    async def _conduct_voting(self):
+        """Collect votes from all agents"""
+        print("  📢 Requesting votes from all agents...")
+        
+        # Give agents time to process proposal and vote
+        await asyncio.sleep(0.2)
+        
+        # Trigger agents to process messages
+        for agent in [self.mood_analyzer, self.location_agent, self.safety_agent]:
+            await agent.check_and_process_messages()
+        
+        # Collect votes
+        votes = self.message_bus.get_messages_for(
+            agent_id="Coordinator",
+            message_type=MessageType.VOTE
+        )
+        
+        vote_list = [
+            {
+                "agent": v.sender,
+                "vote": v.content.get("vote"),
+                "reasoning": v.content.get("reasoning"),
+                "confidence": v.content.get("confidence", 1.0)
+            }
+            for v in votes
+        ]
+        
+        print(f"\n  📊 Vote Tally:")
+        for v in vote_list:
+            print(f"    • {v['agent']}: {v['vote']} - {v['reasoning']}")
+        
+        return vote_list
+    
+    def _check_consensus(self, votes):
+        """Check if enough agents approved (60% threshold)"""
+        if not votes:
+            return True  # No votes = proceed
+        
+        approve_count = sum(1 for v in votes if v["vote"] == "APPROVE")
+        total = len(votes)
+        percentage = (approve_count / total) * 100
+        
+        return percentage >= 60  # 60% consensus required
+    
+    async def process_message(self, message):
+        return None
+    
+    def get_statistics(self):
+        """Get statistics about agent communications"""
+        history = self.message_bus.get_history()
+        
+        stats = {
+            "total_messages": len(history),
+            "messages_by_type": {},
+            "messages_by_agent": {},
+            "agent_interactions": []
+        }
+        
+        for msg in history:
+            # Count by type
+            msg_type = msg.message_type.value
+            stats["messages_by_type"][msg_type] = stats["messages_by_type"].get(msg_type, 0) + 1
+            
+            # Count by agent
+            sender = msg.sender
+            stats["messages_by_agent"][sender] = stats["messages_by_agent"].get(sender, 0) + 1
+            
+            # Track interactions
+            if msg.target_agent and msg.target_agent != "ALL":
+                stats["agent_interactions"].append({
+                    "from": msg.sender,
+                    "to": msg.target_agent,
+                    "type": msg_type
+                })
+        
+        return stats

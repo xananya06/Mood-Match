@@ -1,5 +1,5 @@
 """
-Matching Routes - UPDATED WITH PROFILES AND LOCATIONAGENT
+Matching Routes - UPDATED WITH MULTI-AGENT COMMUNICATION
 Handles peer matching requests using demo student profiles.
 """
 
@@ -7,20 +7,29 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Dict, Optional
 from datetime import datetime
+import anthropic
+import os
 
 from app.agents.multi_agent_coordinator import MultiAgentCoordinator
 from app.agents.peer_matcher import PeerMatcher
 from app.agents.email_generator import EmailGenerator
 from app.agents.location_agent import LocationAgent
+from app.agents.message_bus import MessageBus
 from app.demo_data import DEMO_STUDENT_PROFILES, get_student_by_id, get_all_students_except
 
 router = APIRouter()
 
-# Initialize agents
-coordinator = MultiAgentCoordinator()
-peer_matcher = PeerMatcher()
-email_generator = EmailGenerator()
-location_agent = LocationAgent()
+# Initialize clients
+anthropic_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+# Create a shared message bus for agents
+message_bus = MessageBus()
+
+# Initialize agents with message_bus and clients
+coordinator = MultiAgentCoordinator(anthropic_client, None)
+peer_matcher = PeerMatcher(message_bus, anthropic_client, None)  # Takes 3 args
+email_generator = EmailGenerator(message_bus, anthropic_client)  # Takes 2 args only
+location_agent = LocationAgent(message_bus, anthropic_client)  # Takes 2 args only
 
 # Use demo student profiles as waiting peers
 waiting_peers = {}
@@ -70,8 +79,8 @@ async def analyze_mood(request: MoodEntryRequest):
                 "mood_post": request.mood_text
             }
         
-        # Process through coordinator
-        result = coordinator.process_mood_entry(
+        # Process through coordinator (now async!)
+        result = await coordinator.process_mood_entry(
             mood_text=request.mood_text,
             user_profile=user_profile
         )
@@ -82,6 +91,8 @@ async def analyze_mood(request: MoodEntryRequest):
         return result
         
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -89,7 +100,7 @@ async def analyze_mood(request: MoodEntryRequest):
 async def find_match(request: MatchRequest):
     """
     Find a compatible peer match using profiles + mood.
-    NOW WITH LOCATION RECOMMENDATIONS!
+    NOW WITH MULTI-AGENT COMMUNICATION AND VOTING!
     """
     try:
         user_id = request.user_id
@@ -127,9 +138,9 @@ async def find_match(request: MatchRequest):
             "user_input": mood_analysis.get("user_input", "")
         }
         
-        # Find match using PeerMatcher
-        match_result = peer_matcher.find_match(
-            student_profile=student_profile_for_matching,
+        # Find match using PeerMatcher (MUST AWAIT since it's async!)
+        match_result = await peer_matcher.find_match(
+            user_profile=student_profile_for_matching,  # Changed from student_profile to user_profile
             available_peers=available_peers_list
         )
         
@@ -157,41 +168,38 @@ async def find_match(request: MatchRequest):
             "conversation_starters": match_result.get("conversation_starters", [])
         }
         
-        # Get location recommendations - NEW!
+        # Get location recommendation (simplified - just use defaults for now)
         try:
-            location_recommendations = location_agent.recommend_locations(
-                student_profile=user_profile,
-                student2_profile=matched_peer_data.get("profile", {}),
-                match_context=match_context
+            location_recommendations = await location_agent.recommend_location(
+                mood_themes=mood_analysis.get("emotional_themes", []),
+                student_a=user_profile,
+                student_b=matched_peer_data.get("profile", {})
             )
         except Exception as e:
             print(f"Error getting locations: {e}")
-            location_recommendations = None
+            location_recommendations = {
+                "location": "Mugar Library",
+                "reasoning": "Quiet study space",
+                "address": "771 Commonwealth Ave"
+            }
         
-        # Generate emails with location recommendations
+        # Generate emails (simplified)
         try:
-            email1 = email_generator.generate_match_email(
-                student_profile=user_profile,
-                matched_peer_profile=matched_peer_data.get("profile", {}),
-                match_context=match_context,
-                location_recommendations=location_recommendations
+            email1 = await email_generator.generate_email(
+                user_profile=user_profile,
+                match_result=match_result,
+                location=location_recommendations
             )
             
-            email2 = email_generator.generate_match_email(
-                student_profile=matched_peer_data.get("profile", {}),
-                matched_peer_profile=user_profile,
-                match_context=match_context,
-                location_recommendations=location_recommendations
+            email2 = await email_generator.generate_email(
+                user_profile=matched_peer_data.get("profile", {}),
+                match_result=match_result,
+                location=location_recommendations
             )
         except Exception as e:
             print(f"Error generating emails: {e}")
-            email1 = {"subject": "Match Found", "body": "You have a new match!"}
-            email2 = {"subject": "Match Found", "body": "You have a new match!"}
-        
-        # Remove both from waiting pool (simulate)
-        # In production, you'd actually remove them
-        # del waiting_peers[user_id]
-        # del waiting_peers[matched_peer_id]
+            email1 = {"subject": "Match Found", "body": "You have a new match!", "tone": "warm"}
+            email2 = {"subject": "Match Found", "body": "You have a new match!", "tone": "warm"}
         
         # Build response
         result = {
@@ -211,7 +219,7 @@ async def find_match(request: MatchRequest):
             "shared_emotional_themes": match_result.get("shared_emotional_themes", []),
             "shared_interests": match_result.get("shared_interests", []),
             "conversation_starters": match_result.get("conversation_starters", []),
-            "location_recommendations": location_recommendations,  # NEW!
+            "location_recommendations": location_recommendations,
             "email_preview": email1,
             "peer_email_preview": email2,
             "safety_resources": match_result.get("safety_flag", False)
