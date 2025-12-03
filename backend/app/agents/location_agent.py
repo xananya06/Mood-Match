@@ -64,7 +64,7 @@ Return JSON with:
             }
     
     async def process_message(self, message):
-        """Respond to queries and vote on proposals"""
+        """Respond to queries"""
         
         # Respond to queries
         if message.message_type == MessageType.QUERY:
@@ -78,17 +78,5 @@ Return JSON with:
                     },
                     in_reply_to=message.message_id
                 )
-        
-        # Vote on match proposals
-        elif message.message_type == MessageType.PROPOSAL:
-            return self.send_to(
-                receiver="Coordinator",
-                message_type=MessageType.VOTE,
-                content={
-                    "vote": "APPROVE",
-                    "reasoning": "Good meeting locations available on campus",
-                    "confidence": 0.90
-                }
-            )
         
         return None

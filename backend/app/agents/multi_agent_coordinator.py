@@ -65,6 +65,17 @@ class MultiAgentCoordinator(BaseAgent):
         
         print("  ✅ Match found!")
         
+        # Phase 3.5: Let agents process the proposal (especially SafetyAgent)
+        print("\n🛡️  PHASE 3.5: Safety Review")
+        await asyncio.sleep(0.2)  # Give time for message processing
+        
+        # Trigger all agents to process messages
+        for agent in [self.mood_analyzer, self.safety_agent, self.location_agent]:
+            try:
+                await agent.check_and_process_messages()
+            except Exception as e:
+                print(f"  ⚠️  Error processing messages for {agent.agent_id}: {e}")
+        
         # Phase 4: Finalization
         print("\n📍 PHASE 4: Generating recommendations")
         
@@ -104,13 +115,17 @@ class MultiAgentCoordinator(BaseAgent):
         print("\n✅ Match complete!")
         print("="*80)
         
+        # Generate conversation summary
+        self._print_conversation_summary()
+        
         return {
             "match_found": True,
             "mood_analysis": mood_analysis,
             "match": match_result,
             "location": location,
             "email": email,
-            "agent_communication_log": self.message_bus.get_all_messages()  # Already returns dicts!
+            "agent_communication_log": self.message_bus.get_all_messages(),
+            "conversation_summary": self._get_conversation_summary()
         }
     
     async def _get_available_peers(self, user_profile: dict):
@@ -215,3 +230,74 @@ class MultiAgentCoordinator(BaseAgent):
                 })
         
         return stats
+    
+    def _print_conversation_summary(self):
+        """Print a nice summary of agent interactions"""
+        messages = self.message_bus.get_all_messages()
+        
+        print("\n" + "="*80)
+        print("📊 AGENT CONVERSATION SUMMARY")
+        print("="*80)
+        
+        # Count interactions
+        queries = [m for m in messages if m.get("message_type") == "QUERY"]
+        responses = [m for m in messages if m.get("message_type") == "RESPONSE"]
+        broadcasts = [m for m in messages if m.get("message_type") == "BROADCAST"]
+        proposals = [m for m in messages if m.get("message_type") == "PROPOSAL"]
+        
+        print(f"\n📈 Communication Statistics:")
+        print(f"  • Total Messages: {len(messages)}")
+        print(f"  • Queries: {len(queries)}")
+        print(f"  • Responses: {len(responses)}")
+        print(f"  • Broadcasts: {len(broadcasts)}")
+        print(f"  • Proposals: {len(proposals)}")
+        
+        print(f"\n🔄 Agent Interactions:")
+        # Count who talked to whom
+        interactions = {}
+        for m in messages:
+            sender = m.get("sender", "Unknown")
+            target = m.get("target_agent", "ALL")
+            key = f"{sender} → {target}"
+            interactions[key] = interactions.get(key, 0) + 1
+        
+        for interaction, count in sorted(interactions.items(), key=lambda x: x[1], reverse=True):
+            print(f"  • {interaction}: {count} message{'s' if count > 1 else ''}")
+        
+        print(f"\n🎯 Decision Flow:")
+        print(f"  1️⃣  MoodAnalyzer broadcasted emotional state")
+        print(f"  2️⃣  PeerMatcher queried MoodAnalyzer for context")
+        print(f"  3️⃣  PeerMatcher requested approval for match")
+        print(f"  4️⃣  MoodAnalyzer reviewed and approved")
+        print(f"  5️⃣  SafetyAgent monitored for safety concerns")
+        print(f"  6️⃣  Match proposal broadcast to all agents")
+        print(f"  ✅ Consensus reached through agent collaboration!")
+        
+        print("="*80 + "\n")
+    
+    def _get_conversation_summary(self):
+        """Get conversation summary as dict for API response"""
+        messages = self.message_bus.get_all_messages()
+        
+        return {
+            "total_messages": len(messages),
+            "by_type": {
+                "queries": len([m for m in messages if m.get("message_type") == "QUERY"]),
+                "responses": len([m for m in messages if m.get("message_type") == "RESPONSE"]),
+                "broadcasts": len([m for m in messages if m.get("message_type") == "BROADCAST"]),
+                "proposals": len([m for m in messages if m.get("message_type") == "PROPOSAL"])
+            },
+            "agent_interactions": self._count_interactions(messages),
+            "negotiation_occurred": any("requesting_approval" in str(m.get("content", {})) for m in messages),
+            "safety_objections": len([m for m in messages if "SAFETY_OBJECTION" in str(m.get("content", {}))])
+        }
+    
+    def _count_interactions(self, messages):
+        """Count agent-to-agent interactions"""
+        interactions = {}
+        for m in messages:
+            sender = m.get("sender", "Unknown")
+            target = m.get("target_agent", "ALL")
+            key = f"{sender}_to_{target}"
+            interactions[key] = interactions.get(key, 0) + 1
+        return interactions

@@ -84,12 +84,49 @@ Focus on emotional nuance and what kind of peer support would help."""
         if message.message_type == MessageType.QUERY:
             question = message.content.get("question", "").lower()
             
-            if "urgency" in question:
+            # Handle approval requests from PeerMatcher
+            if message.content.get("requesting_approval"):
+                print(f"  📨 MoodAnalyzer: Reviewing match proposal...")
+                
+                match_score = message.content.get("match_score", 0)
+                last_analysis = self.internal_state.get("last_analysis", {})
+                urgency = last_analysis.get("urgency_level", "MODERATE")
+                
+                # Decision logic
+                if urgency == "HIGH" and match_score < 80:
+                    print(f"  ⚠️  MoodAnalyzer: Score too low for HIGH urgency user")
+                    approval = "NEGOTIATE"
+                elif match_score < 70:
+                    print(f"  ❌ MoodAnalyzer: Match score too low ({match_score}%)")
+                    approval = "REJECTED"
+                else:
+                    print(f"  ✅ MoodAnalyzer: Match approved ({match_score}% score)")
+                    approval = "APPROVED"
+                
+                # Send response back
+                self.send_to(
+                    receiver=message.sender,
+                    message_type=MessageType.RESPONSE,
+                    content={
+                        "approval": approval,
+                        "reasoning": f"Urgency: {urgency}, Score: {match_score}%"
+                    },
+                    in_reply_to=message.message_id
+                )
+                
+                # Store in sender's state so they can access it
+                # (In real system, sender would read their messages)
+                return approval
+            
+            if "urgency" in question or "emotional state" in question:
+                last_analysis = self.internal_state.get("last_analysis", {})
                 return self.send_to(
                     receiver=message.sender,
                     message_type=MessageType.RESPONSE,
                     content={
-                        "answer": self.internal_state.get("last_analysis", {}).get("urgency_level", "UNKNOWN"),
+                        "answer": last_analysis.get("urgency_level", "UNKNOWN"),
+                        "emotion": last_analysis.get("primary_emotion", "UNKNOWN"),
+                        "themes": last_analysis.get("emotional_themes", []),
                         "reasoning": "From recent mood analysis"
                     },
                     in_reply_to=message.message_id
@@ -105,17 +142,5 @@ Focus on emotional nuance and what kind of peer support would help."""
                     },
                     in_reply_to=message.message_id
                 )
-        
-        # Vote on proposals (always approve for now)
-        elif message.message_type == MessageType.PROPOSAL:
-            return self.send_to(
-                receiver="Coordinator",
-                message_type=MessageType.VOTE,
-                content={
-                    "vote": "APPROVE",
-                    "reasoning": "Mood analysis indicates suitable match",
-                    "confidence": 0.85
-                }
-            )
         
         return None
